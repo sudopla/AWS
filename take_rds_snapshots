@@ -32,4 +32,3 @@ def lambda_handler(event, context):
                     snapshot_time = snapshot['SnapshotCreateTime'].replace(tzinfo=None)
                     if snapshot_time < delete_time:
                         rds_client.delete_db_snapshot(DBSnapshotIdentifier=snapshot_identifier)
-
