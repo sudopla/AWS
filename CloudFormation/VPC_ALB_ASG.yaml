@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VPC Auto Scaling and ALB
+Parameters:
+  KeyName:
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: CloudFormationVPC
+  #Create Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: CloudFormationInternetGateway
+  #Attach Internet gateway to the VPC
+  VPCAttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  #Subnets
+  Subnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.10.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CloudFormationSubnet1
+  Subnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.20.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CloudFormationSubnet2
+
+  #Specifies a route table for a specified VPC. This is not the default route.
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: CloudFormationRoute
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCAttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  #Route Table Association
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref Subnet1
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref Subnet2
+
+  #Security Groups
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow connections to Webserver-3
+      GroupName: CloudFormationSG
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 192.168.1.1/32
+      VpcId: !Ref VPC
+
+ #Auto Scaling Group
+  myASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: VPCAttachGateway
+    Properties:
+      AutoScalingGroupName: Cloud Formation AutoScaling
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '3'
+      #A list of subnet IDs for a virtual private cloud (VPC)
+      VPCZoneIdentifier:
+        - !Ref Subnet1
+        - !Ref Subnet2
+      #Connect ASG with Target Group of ALB
+      TargetGroupARNs:
+        - !Ref  MyTargetGroup
+  #Target Tracking Scaling Policy
+  myCPUPolicy:
+      Type: AWS::AutoScaling::ScalingPolicy
+      Properties:
+        AutoScalingGroupName: !Ref myASG
+        #Auto Scaling Policy - Allowed Values: SimpleScaling (default), StepScaling, or TargetTrackingScaling
+        PolicyType: TargetTrackingScaling
+        #Configures a target tracking scaling policy. For Step scaling use - StepAdjustments and also add AdjustmentType property
+        #For Simple scaling use -  ScalingAdjustment property and add AdjustmentType property
+        TargetTrackingConfiguration:
+          #A predefined metric. For a custom metric use - CustomizedMetricSpecification
+          PredefinedMetricSpecification:
+            PredefinedMetricType: ASGAverageCPUUtilization
+          TargetValue: 80
+  #Launch Template
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          webserver_install:
+            - configure_server
+        configure_server:
+          commands:
+            modify_page:
+              command: echo "<html><body><center><h1>Welcome to JPLA Web Site!</h1></center></body></html>" > /var/www/html/index.html
+          packages:
+            yum:
+              httpd: []
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - Ebs:
+              VolumeSize: 8
+            DeviceName: /dev/sdf
+        ImageId: ami-0b69ea66ff7391e80
+        InstanceType: t2.micro
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        UserData:
+          # the packet aws-cfn-boostrap contains the AWS CloudFormation helper scripts
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            yum update -y aws-cfn-bootstrap
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource LaunchTemplate --configsets webserver_install --region ${AWS::Region}
+
+  #Application Load Balancer
+  ALB:
+    #This type is for ALB or NLB
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: VPCAttachGateway
+    Properties:
+      Name: ALB
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SecurityGroup
+      Subnets:
+        - !Ref Subnet1
+        - !Ref Subnet2
+      Type: application
+  HTTPlistener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      #The actions for the default rule. List of Action
+      #If you want to create more rules, then create a resource AWS::ElasticLoadBalancingV2::ListenerRule and reference this HTTPListener on it
+      DefaultActions:
+        - Type: forward
+          #The Amazon Resource Name (ARN) of the target group. Specify only when Type is forward.
+          TargetGroupArn: !Ref MyTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ALBTargetGroup1
+      #I will be using default HealthCheck values so I do not need to specify those properties here
+      TargetType: instance
+      #The port on which the targets receive traffic.
+      Port: 80
+      #The protocol to use for routing traffic to the targets.
+      Protocol: HTTP
+      VpcId: !Ref VPC
