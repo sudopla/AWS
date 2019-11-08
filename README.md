@@ -11,5 +11,6 @@ Also, the script will remove in S3 the files that were removed in the source dir
 **Start/Stop EC2 and RDS instances**
 
 The Lambda functions [start_stop_ec2_instances.py](start_stop_ec2_instances.py) and [start_stop_rds_instances.py](start_stop_rds_instances.py) allow to to run EC2 or RDS instances only during a daily schedule. 
+&nbsp;
 Create two CloudWatch events with the start and stop times respectively and add them as triggers to the Lambda function. 
 You will also need to tag the machines or RDS instnaces that will be in this schedule with Schedule=office-hours. 
