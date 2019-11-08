@@ -11,5 +11,5 @@ Also, the script will remove in S3 the files that were removed in the source dir
 
 #Start_Stop_EC2_Instances
 
-Create two CloudWath events with the start and stop times respectively and add them as triggers to the Lambda function. 
+Create two CloudWatch events with the start and stop times respectively and add them as triggers to the Lambda function. 
 You will also need to tag the machines that will be in this schedule with Schedule=office-hours. 
