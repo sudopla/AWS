@@ -1,5 +1,5 @@
 
-**Backup files to S3 (mirror local data)**
+**Backup files to S3**
 
 This script [backup_to_S3.py](backup_to_S3.py) allows you to back up a directory to Amazon S3.
 
