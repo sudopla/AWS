@@ -1,4 +1,3 @@
-
 **Back up files to S3**
 
 The script [backup_to_S3.py](backup_to_S3.py) allows you to back up a directory to Amazon S3.
