@@ -16,3 +16,36 @@ You will also need to tag the machines or RDS instnaces that will be in this sch
 
 The Lambda funtion [take_snapshots.py](take_snapshots.py) backs up the volumes attached to running EC2 instances tagged with Backup=yes. </br>
 This function will also remove snapshots older than the specified retention time. 
+
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:*"
+            ],
+            "Resource": "arn:aws:logs:*:*:*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "ec2:Describe*",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:CreateSnapshot",
+                "ec2:DeleteSnapshot",
+                "ec2:CreateTags",
+                "ec2:ModifySnapshotAttribute",
+                "ec2:ResetSnapshotAttribute"
+            ],
+            "Resource": [
+                "*"
+            ]
+        }
+    ]
+}
+```
