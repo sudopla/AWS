@@ -95,7 +95,7 @@ IAM role for start_stop_ec2_instances.py function. Please notice that in this ex
     ]
 }
 ```
-IAM role for start_stop_rds_instances.py function. Please notice that in this example the RDS instance is encrypted so you have to allow the function to access the KMS key. 
+IAM role for start_stop_rds_instances.py function. Please notice that in this example the RDS instances are encrypted so you have to allow the function to access the KMS key. 
 ```
 {
     "Version": "2012-10-17",
