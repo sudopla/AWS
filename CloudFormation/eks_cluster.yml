@@ -1,11 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Deploy EKS cluster and Worker Nodes in new VPC
-
+Description: Deploy container application on Fargate ECS Cluster
 Parameters:
   ClusterName:
     Type: String
-    Default: EKS_CLUSTER
-    Description: Name of EKS Cluster
+    Default: ECS_CLUSTER
+    Description: Name of ECS Cluster
   VpcBlock:
     Type: String
     Default: 10.10.0.0/16
@@ -18,51 +17,115 @@ Parameters:
     Type: String
     Default: 10.10.1.0/24
     Description: CidrBlock for public subnet 2 within the VPC
+  ServiceName:
+    Type: String
+    Default: django-app
+    Description: A name for the service or ECS Application
+  ContainerPort:
+    Type: Number
+    Default: 8080
+    Description: What port number the application inside the docker container is binding to
+  ContainerImage:
+    Type: String
+    Description: ECR IMAGE URI for your container application
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
-      -
-        Label:
+      - Label:
           default: "Worker Network Configuration"
         Parameters:
           - ClusterName
           - VpcBlock
           - PublicSubnet1Block
           - PublicSubnet2Block
+          - ServiceName
+          - ContainerPort
+          - ContainerImage
 
 Resources:
-  #EKS Cluster
-  myCluster:
-    Type: 'AWS::EKS::Cluster'
-    Properties:
-      Name: !Ref ClusterName
-      Version: '1.14'
-      RoleArn: !GetAtt eksServiceRole.Arn
-      ResourcesVpcConfig:
-        SecurityGroupIds:
-          - !Ref ControlPlaneSecurityGroup
-        SubnetIds:
-          - !Ref PublicSubnet1
-          - !Ref PublicSubnet2 
-  #NodeGroup
-  EKSNodegroup:
-    Type: 'AWS::EKS::Nodegroup'
+  #ECS Cluster
+  MyECSCluster:
+    Type: 'AWS::ECS::Cluster'
     Properties:
       ClusterName: !Ref ClusterName
-      NodegroupName: !Sub ${ClusterName}-NodeGroup
-      NodeRole: !GetAtt NodeInstanceRole.Arn
-      AmiType: AL2_x86_64
-      InstanceTypes:
-        - t3.medium
-      ScalingConfig:
-        MinSize: 2
-        DesiredSize: 3
-        MaxSize: 5
-      Subnets:
-        - !Ref PublicSubnet1
-        - !Ref PublicSubnet2
-  
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+  #Task Definition
+  MyTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ServiceName
+      NetworkMode: awsvpc
+      #Task Execution Role
+      ExecutionRoleArn: !Ref ecsServiceRole
+      #2 GB
+      Memory: 2048
+      #1 vCPU
+      Cpu: 1024
+      #The launch type the task requires
+      RequiresCompatibilities:
+        - FARGATE
+      #A list of container definitions that describe the different containers that make up your task
+      ContainerDefinitions:
+        - Name: !Ref ServiceName
+          Image: !Ref ContainerImage
+          #The list of port mapping for the container. For task definitions that use the awsvpc network mode, you should only specify the containerPort
+          PortMappings:
+            - ContainerPort: 8080
+  #ECS Service
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: HTTPlistener
+    Properties:
+      ServiceName: !Ref ServiceName
+      #Name of the cluster on which to run your service
+      Cluster: !Ref MyECSCluster
+      LaunchType: FARGATE
+      #Specify this if you are using Rolling update
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      #The number of instantiations of the specified task definition to place and keep running on your cluster.
+      DesiredCount: 2
+      TaskDefinition: !Ref MyTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          #The security groups associated with the task or service.
+          SecurityGroups:
+            - !Ref ContainerSG
+          #The subnets associated with the task or service.
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+      #A list of load balancer objects to associate with the cluster.
+      #ContainerName - The name of the container (as it appears in a container definition) to associate with the load balancer.
+      #ContainerPort - The port on the container to associate with the load balancer.
+      #TargetGroupArn - The full Amazon Resource Name (ARN) of the Elastic Load Balancing target group
+      LoadBalancers:
+        - ContainerName: !Ref ServiceName
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref ECSTargetGroup
+
+  #ECS Task Execution Role
+  ecsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ecsTaskRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
   #Create VPC, Subnets and Security Groups
   VPC:
     Type: 'AWS::EC2::VPC'
@@ -73,14 +136,14 @@ Resources:
       InstanceTenancy: default
       Tags:
         - Key: Name
-          Value: CloudFormationEKSVPC
+          Value: CloudFormationECSVPC
   #Create Internet Gateway
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: CloudFormationEKSInternetGateway
+          Value: CloudFormationECSInternetGateway
   #Attach Internet gateway to the VPC
   VPCAttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -117,7 +180,7 @@ Resources:
       CidrBlock: !Ref PublicSubnet1Block
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-PublicSubnet1"
+          Value: !Sub "${AWS::StackName}-ECS-PublicSubnet1"
   PublicSubnet2:
     Type: 'AWS::EC2::Subnet'
     Properties:
@@ -130,8 +193,7 @@ Resources:
       CidrBlock: !Ref PublicSubnet2Block
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-PublicSubnet2"
-          
+          Value: !Sub "${AWS::StackName}-ECS-PublicSubnet2"
   #Route Table Association
   Subnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -143,46 +205,53 @@ Resources:
     Properties:
       RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet2
-
-  #Security Group - control plane - node groups communication
-  ControlPlaneSecurityGroup:
+  #Security Groups
+  ContainerSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Cluster communication with worker nodes
+      GroupDescription: Allow connections to Container App
+      GroupName: CloudFormationSG
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          CidrIp: 0.0.0.0/0
       VpcId: !Ref VPC
-  
-  #EKS Cluster role
-  eksServiceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - eks.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
-        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
 
-  #Worker nodes role
-  NodeInstanceRole:
-    Type: "AWS::IAM::Role"
+  #Application Load Balancer
+  ECSALB:
+    #This type is for ALB or NLB
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: VPCAttachGateway
     Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - "sts:AssumeRole"
-      ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-        - "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-        - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-      Path: /
+      Name: ALB
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ContainerSG
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Type: application
+  HTTPlistener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      #The actions for the default rule. List of Action
+      #If you want to create more rules, then create a resource AWS::ElasticLoadBalancingV2::ListenerRule and reference this HTTPListener on it
+      DefaultActions:
+        - Type: forward
+          #The Amazon Resource Name (ARN) of the target group. Specify only when Type is forward.
+          TargetGroupArn: !Ref ECSTargetGroup
+      LoadBalancerArn: !Ref ECSALB
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+  ECSTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ALBTargetGroup1
+      #For services with tasks using the awsvpc network mode you must use ip as target type
+      TargetType: ip
+      #The port on which the targets receive traffic.
+      Port: !Ref ContainerPort
+      #The protocol to use for routing traffic to the targets.
+      Protocol: HTTP
+      VpcId: !Ref VPC
